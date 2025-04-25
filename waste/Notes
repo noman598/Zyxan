@@ -1,0 +1,117 @@
+
+What Does "Model" Actually Mean? ==>
+In simple terms:
+A model is just a structured representation of data in your code.
+
+
+Pydantic Model (Schema) ==>
+A model that defines the shape of data you send to or receive from the API.
+📦 It models the structure of data for:
+Request body (POST/PUT)
+Response (GET)
+
+
+
+Database Model (SQLAlchemy ORM Model) ==>
+A model that defines the structure of a table in the database.
+This says: in the database, there should be a table (table_name) with n columns: id, name, and email and more.
+
+
+engine — The Database Connector ==>
+engine is like a bridge between your Python code and your actual MySQL database.
+ This tells SQLAlchemy how to talk to the database: where it is, what port, what username/password to use, etc.
+
+
+
+session — Your DB Messenger  ==>
+What is it?
+A session is your personal helper that talks to the database for you.
+🧑‍💻 When you say:
+“Please save this user”
+“Please get all users”
+“Please delete that guy”
+
+➡️ The session is what actually runs those commands and gets the results.
+
+from sqlalchemy.orm import sessionmaker
+SessionLocal = sessionmaker(bind=engine)
+
+Later, when you're using it:
+db = SessionLocal()
+you now have a session (db) that can:
+Add data: db.add(...)
+Commit changes: db.commit()
+Query tables: db.query(...)
+
+
+
+What is a Dependency?  ==>
+In FastAPI, a dependency is a way to inject reusable logic into your endpoints. One common example is handling database sessions.
+
+🔧 Why use dependencies?
+Let’s say every route needs to:
+Open a database session
+Do some DB operations
+Close the session properly
+💡 Instead of repeating that in every function, you use a dependency function like this:
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+Then you use it in your route like this:
+
+@app.get("/users")
+def read_users(db: Session = Depends(get_db)):
+    return db.query(User).all()
+
+
+⚙️ What's Happening?
+Depends(get_db) tells FastAPI:
+"Hey, before running this route, call get_db()."
+Use the db session it returns.
+After the route finishes, FastAPI automatically closes the session for you.
+
+
+
+
+def create_user(user: UserCreate, db: Session = Depends(get_db)):  ===>
+
+user: UserCreate
+This is a type hint saying the user parameter must be a UserCreate model.
+
+db: Session = Depends(get_db)
+This is FastAPI's dependency injection system
+It means:
+For each request, call get_db() to get a database session
+Make that session available as the db parameter
+Automatically close the session when done handled in get_db.
+
+
+
+
+def create_user(user: UserBase, db: Session = Depends(get_db)): ==>
+
+user: UserBase-
+user is a parameter of the function.
+It's expected to be an object of the Pydantic model UserBase.
+This model holds the user input data (e.g., from a POST request to create a user).
+
+
+
+
+new_user = User(name=user.name, email=user.email) ==>
+
+User(...):
+This creates a new instance of the SQLAlchemy model named User.
+Think of it like creating a row in the database table in memory, before actually saving it.
+
+new_user = User(name=user.name, email=user.email)
+Is equal to:
+new_user = User(name="Alice", email="alice@example.com")
+
+
