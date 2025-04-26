@@ -15,6 +15,10 @@ import re
 import json
 from openai import OpenAI
 from dotenv import load_dotenv
+from datetime import datetime
+import uuid
+
+
 
 from app.models import User
 from app.database import engine, get_db, Base, SessionLocal
@@ -95,39 +99,61 @@ def delete_row(payload: DeleteRequest, db:Session = Depends(get_db)):
 
 # ---- upload endpoint ----
 @app.post("/upload/")
-async def upload_file(files: UploadFile = File(...)):
+async def upload_file(files: list[UploadFile] = File(...), db: Session = Depends(get_db)):
+    request_id = str(uuid.uuid4())
+    file_ids = []
 
-
-    # for file in files:
+    for file in files:
         try:
             if not file.filename:
                 raise HTTPException(status_code = 400, detail = "No file uploaded")
+                # continue
             
             elif not is_allowed_file(file.filename):
-                raise HTTPException(status_code = 400, detial = "File type not Allowed")
+                raise HTTPException(status_code = 400, detail = "File type not Allowed")
 
             file_location = os.path.join(UPLOAD_DIR, file.filename)
 
             with open(file_location, 'wb') as buffer:
                 contents = await file.read()
                 buffer.write(contents)
+
+
+            file_id = str(uuid.uuid4())
+            uploaded_time = datetime.utcnow()
             
-            return {
-                "filename": file.filename,
-                # "description": description,
-                "content_type": file.content_type,
-                "size": len(contents),
-                "saved_to": file_location,
-                "message": "File uploaded successfully"
-            }
+            file_record = User(
+                file_id = file_id,
+                filename = file.filename,
+                uploaded_by = 1,
+                uploaded_time = uploaded_time,
+                request_id=request_id
+
+            )
+
+            db.add(file_record)
+            db.commit()
+            db.refresh(file_record)
+
+            file_ids.append(file_id)
+            # return {
+            #     "filename": file.filename,
+            #     # "description": description,
+            #     "content_type": file.content_type,
+            #     "size": len(contents),
+            #     "saved_to": file_location,
+            #     "message": "File uploaded successfully"
+            # }
 
         except Exception as e:
+            print("Error:" , str(e))
             raise HTTPException(
                 status_code=500,
                 detail=f"Error processing file: {str(e)}"
             )
 
-
+    # return {"file_ids": file_ids}
+    return{"content":"succefully uploaded"}
 
 # id, filename, revision, data, diff, 
 

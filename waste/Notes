@@ -115,3 +115,41 @@ Is equal to:
 new_user = User(name="Alice", email="alice@example.com")
 
 
+# ---------------------------filename --------------------
+
+@app.post("/extract/{filename}")
+async def extract_file(filename: str, user: UserBase, db: Session = Depends(get_db)):  ==>
+filename==>
+The filename is a path parameter, defined in the route itself with {filename}.
+FastAPI automatically reads it from the URL and passes it to the function.
+
+
+what if i use - @app.post("/extract")  ==>
+
+Then FastAPI expects filename to come from either:
+1) Query Parameter
+Request URL:
+POST /extract?filename=my_file.docx
+
+2)  2. Request Body
+If you send a JSON body, like:
+{
+  "filename": "my_file.docx",
+  "user": { ... }
+}
+Then you need to define a Pydantic model to receive it:
+pydantic model ->
+class ExtractRequest(BaseModel):
+    filename: str
+    user: UserBase
+
+@app.post("/extract")
+async def extract_file(data: ExtractRequest, db: Session = Depends(get_db)):
+    filename = data.filename
+    user = data.user
+
+
+
+#-----------------------------------------------------------------
+
+
