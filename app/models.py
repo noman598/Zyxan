@@ -9,7 +9,7 @@ import uuid
 #     email = Column(String(100), unique=True, index=True)
 
 class User(Base):
-    __tablename__ = "table"
+    __tablename__ = "last_table"
     id = Column(Integer, primary_key=True, index=True)
     file_id = Column(String(100), unique=True, index=True, default=lambda: str(uuid.uuid4()))
     filename = Column(String(255), nullable=False)
@@ -17,6 +17,9 @@ class User(Base):
     uploaded_time = Column(DateTime, default=datetime.utcnow)
     request_id = Column(String(36))
     payload = Column(JSON)
+    revision = Column(Integer, default=0)
+    diff = Column(JSON)
+    
 
 
 

@@ -23,7 +23,7 @@ import uuid
 from app.models import User
 from app.database import engine, get_db, Base, SessionLocal
 from sqlalchemy.orm import Session
-from app.schema import UserBase, UserResponse, DeleteRequest
+from app.schema import UserBase, UserResponse, DeleteRequest, FileList
 
 Base.metadata.create_all(bind=engine)
 
@@ -160,52 +160,93 @@ async def upload_file(files: list[UploadFile] = File(...), db: Session = Depends
 
 # --- Extract endpoint ----
 
-@app.post("/extract/{filename}")
-async def extract_file(filename:str, user: UserBase, db: Session = Depends(get_db)):
-    file_path = os.path.join(UPLOAD_DIR, filename)
+@app.post("/extract")
+async def extract_file(file_list: FileList, db: Session = Depends(get_db)):
 
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code = 400, detail = "File not found")
+    results = []
+    for filename in file_list.filenames:
+        try:
 
-    #extract based on filetype - 
+            file_path = os.path.join(UPLOAD_DIR, filename)
 
-    if filename.endswith(".pdf"):
-        text =  await extract_pdf(file_path)
+            if not os.path.exists(file_path):
+                # raise HTTPException(status_code = 400, detail = "File not found")
+                results.append({
+                    "filename": filename,
+                    "status": "error",
+                    "message": "File not found"
+                })
+                continue
 
-    elif filename.endswith(".docx"):
-        text =  await extract_docx(file_path)
+            #extract based on filetype - 
 
-    elif filename.endswith(".json"):
-        text =  await extract_json(file_path)
+            if filename.endswith(".pdf"):
+                text =  await extract_pdf(file_path)
 
-    elif filename.endswith(".csv"):
-        text =  await extract_csv(file_path)
+            elif filename.endswith(".docx"):
+                text =  await extract_docx(file_path)
 
-    elif filename.endswith(".html"):
-        text =  await extract_html(file_path)
+            elif filename.endswith(".json"):
+                text =  await extract_json(file_path)
 
-    extracted_content =  text["content"]
+            elif filename.endswith(".csv"):
+                text =  await extract_csv(file_path)
 
-    prompt = extracted_content + demand_prompt
-    # return {"content":prompt}
-    response =  get_deepseekR1_res(prompt)
-    match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
-    if match:
-        json_str = match.group(1)
-        data = json.loads(json_str)
+            elif filename.endswith(".html"):
+                text =  await extract_html(file_path)
+
+            else:
+                raise ValueError(f"Unsupported file type: {filename}")
+
+            extracted_content =  text["content"]
+
+            # increment the revision count and fetch the oldpayload
+            revision_and_payload = get_revision(filename, db)
+            # if revision_and_payload[0] > 1:
+            old_payload = revision_and_payload[1]
+
+            # print("Value",revision_and_payload[0])
+
+            prompt = extracted_content + demand_prompt
+            # return {"content":prompt}
+            response =  get_deepseekR1_res(prompt)
+            match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
+            if match:
+                json_str = match.group(1)
+                data = json.loads(json_str)
+                
+                file_record = db.query(User).filter(
+                    User.filename == filename, User.request_id == file_list.request_id).first()
+
+                #get the diff field using comparision
+                if revision_and_payload[0] > 1 and old_payload:
+                    diff_dict = get_diff_dict(old_payload, data)
+                    file_record.diff = diff_dict
+
+
+                # db_entry = User(payload = data)
+                file_record.payload = data
+                file_record.revision = revision_and_payload[0]
+                
+                # db.add(db_entry)
+                db.commit()
+                db.refresh(file_record)
+                # return{"id":db_entry.id, "payload": db_entry.payload}
+
+            
+
+
+        except Exception as e:
+            results.append({
+                "filename": filename,
+                "status":"Error",
+                "message": str(e)
+            })
+            continue
+            # return JSONResponse(content={"res": data})
+
         
-        db_entry = User(payload = data)
-        db.add(db_entry)
-        db.commit()
-        db.refresh(db_entry)
-        return{"id":db_entry.id, "payload": db_entry.payload}
-
-
-
-        # return JSONResponse(content={"res": data})
-
-    else:
-        return{("No JSON found")}
+    return {"results": results}
 
 #---------- DeepSeek API Connection -----------
 
@@ -226,6 +267,48 @@ def get_deepseekR1_res(message):
     return response.choices[0].message.content
 
 
+
+
+def get_revision(filename: str, db:Session) -> list:
+    latest_file = db.query(User).filter(User.filename == filename).order_by(User.revision.desc()).first()
+
+    
+
+   #two API code -  
+    if latest_file:
+        new_revision = latest_file.revision + 1
+
+        if new_revision == 1:
+            return [1, None]
+        else:
+            return [new_revision, latest_file.payload]
+
+
+
+ # single API code - 
+    # if latest_file:
+    #     new_revision = latest_file.revision + 1
+    # else:
+    #     new_revision = 1
+
+    # return [new_revision, latest_file.payload if latest_file else None]
+
+
+
+
+def get_diff_dict(old_data: dict, new_data: dict) -> dict:
+    diff = {}
+    for key , new_val in new_data.items():
+        if key not in old_data:
+            diff[key] = {"old": None, "new": new_val}
+        elif str(old_data[key])!=  str(new_val):
+            diff[key] = {"old": old_data[key], "new": new_val}
+        
+    for key in old_data.keys():
+        if key not in new_data:
+            diff[key] = {"old": old_data[key], "new": None}
+
+    return diff
 
 # ----Extract function ------
 
