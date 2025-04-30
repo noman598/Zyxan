@@ -2,11 +2,7 @@ from sqlalchemy import Column, Integer, String, JSON, DateTime
 from .database import Base
 from datetime import datetime
 import uuid
-# class User(Base):
-#     __tablename__ = "users"
-#     id = Column(Integer, primary_key=True, index=True)
-#     name = Column(String(100))
-#     email = Column(String(100), unique=True, index=True)
+
 
 class User(Base):
     __tablename__ = "last_table"

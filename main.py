@@ -56,23 +56,6 @@ def read_root():
     return {"message": "FastAPI is working!"}
 
 
-#-------- Testing Database-------------
-
-# @app.post("/user", response_model = UserResponse, status_code = status.HTTP_201_CREATED)
-# def create_user(user:UserBase, db: Session = Depends(get_db)):
-#     existing_user = db.query(User).filter(User.email == user.email).first()
-#     if existing_user:
-#         raise HTTPException(
-#             status_code=status.HTTP_400_BAD_REQUEST,
-#             detail="Email already exists"
-#         )
-    
-#     new_user = User(name = user.name, email = user.email)
-#     db.add(new_user)
-#     db.commit()
-#     db.refresh(new_user)
-#     return new_user
-
 @app.get("/all", response_model=list[UserResponse])
 def get_all_users(db: Session = Depends(get_db)):
     users = db.query(User).all()
@@ -92,161 +75,125 @@ def delete_row(payload: DeleteRequest, db:Session = Depends(get_db)):
 
 
 
-
-
-
-
-
-# ---- upload endpoint ----
-@app.post("/upload/")
-async def upload_file(files: list[UploadFile] = File(...), db: Session = Depends(get_db)):
+@app.post("/upload-and-extract/")
+async def upload_and_extract(files: list[UploadFile] = File(...), db: Session = Depends(get_db)):
     request_id = str(uuid.uuid4())
-    file_ids = []
+    results = []
 
     for file in files:
         try:
             if not file.filename:
-                raise HTTPException(status_code = 400, detail = "No file uploaded")
-                # continue
-            
-            elif not is_allowed_file(file.filename):
-                raise HTTPException(status_code = 400, detail = "File type not Allowed")
+                raise HTTPException(status_code=400, detail="No file uploaded")
 
+            if not is_allowed_file(file.filename):
+                raise HTTPException(status_code=400, detail="File type not allowed")
+
+            # Save file locally
             file_location = os.path.join(UPLOAD_DIR, file.filename)
-
             with open(file_location, 'wb') as buffer:
                 contents = await file.read()
                 buffer.write(contents)
 
+            # Extract content
+            if file.filename.endswith(".pdf"):
+                text = await extract_pdf(file_location)
+            elif file.filename.endswith(".docx"):
+                text = await extract_docx(file_location)
+            elif file.filename.endswith(".json"):
+                text = await extract_json(file_location)
+            elif file.filename.endswith(".csv"):
+                text = await extract_csv(file_location)
+            elif file.filename.endswith(".html"):
+                text = await extract_html(file_location)
+            else:
+                raise ValueError(f"Unsupported file type: {file.filename}")
 
-            file_id = str(uuid.uuid4())
-            uploaded_time = datetime.utcnow()
-            
+            extracted_content = text["content"]
+
+            # Fetch revision and old payload
+            revision, old_payload = get_revision(file.filename, db)
+
+            # Prepare prompt and get response
+            prompt = extracted_content + demand_prompt
+            response = get_deepseekR1_res(prompt)
+
+            match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
+            if not match:
+                raise ValueError("No valid JSON found in model response")
+            data = json.loads(match.group(1))
+
+            # Calculate diff if needed
+            diff_dict = None
+            if revision > 1 and old_payload:
+                print("hello")
+                diff_dict = get_diff_dict(old_payload, data)
+                print(diff_dict)
+
+            # NOW create full DB record at once
             file_record = User(
-                file_id = file_id,
-                filename = file.filename,
-                uploaded_by = 1,
-                uploaded_time = uploaded_time,
-                request_id=request_id
-
+                file_id=str(uuid.uuid4()),
+                filename=file.filename,
+                uploaded_by=1,  # Replace with dynamic user ID if needed
+                uploaded_time=datetime.utcnow(),
+                request_id=request_id,
+                payload=data,
+                revision=revision,
+                diff=diff_dict
             )
 
             db.add(file_record)
             db.commit()
             db.refresh(file_record)
 
-            file_ids.append(file_id)
-            # return {
-            #     "filename": file.filename,
-            #     # "description": description,
-            #     "content_type": file.content_type,
-            #     "size": len(contents),
-            #     "saved_to": file_location,
-            #     "message": "File uploaded successfully"
-            # }
-
-        except Exception as e:
-            print("Error:" , str(e))
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error processing file: {str(e)}"
-            )
-
-    # return {"file_ids": file_ids}
-    return{"content":"succefully uploaded"}
-
-# id, filename, revision, data, diff, 
-
-
-# --- Extract endpoint ----
-
-@app.post("/extract")
-async def extract_file(file_list: FileList, db: Session = Depends(get_db)):
-
-    results = []
-    for filename in file_list.filenames:
-        try:
-
-            file_path = os.path.join(UPLOAD_DIR, filename)
-
-            if not os.path.exists(file_path):
-                # raise HTTPException(status_code = 400, detail = "File not found")
-                results.append({
-                    "filename": filename,
-                    "status": "error",
-                    "message": "File not found"
-                })
-                continue
-
-            #extract based on filetype - 
-
-            if filename.endswith(".pdf"):
-                text =  await extract_pdf(file_path)
-
-            elif filename.endswith(".docx"):
-                text =  await extract_docx(file_path)
-
-            elif filename.endswith(".json"):
-                text =  await extract_json(file_path)
-
-            elif filename.endswith(".csv"):
-                text =  await extract_csv(file_path)
-
-            elif filename.endswith(".html"):
-                text =  await extract_html(file_path)
-
-            else:
-                raise ValueError(f"Unsupported file type: {filename}")
-
-            extracted_content =  text["content"]
-
-            # increment the revision count and fetch the oldpayload
-            revision_and_payload = get_revision(filename, db)
-            # if revision_and_payload[0] > 1:
-            old_payload = revision_and_payload[1]
-
-            # print("Value",revision_and_payload[0])
-
-            prompt = extracted_content + demand_prompt
-            # return {"content":prompt}
-            response =  get_deepseekR1_res(prompt)
-            match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
-            if match:
-                json_str = match.group(1)
-                data = json.loads(json_str)
-                
-                file_record = db.query(User).filter(
-                    User.filename == filename, User.request_id == file_list.request_id).first()
-
-                #get the diff field using comparision
-                if revision_and_payload[0] > 1 and old_payload:
-                    diff_dict = get_diff_dict(old_payload, data)
-                    file_record.diff = diff_dict
-
-
-                # db_entry = User(payload = data)
-                file_record.payload = data
-                file_record.revision = revision_and_payload[0]
-                
-                # db.add(db_entry)
-                db.commit()
-                db.refresh(file_record)
-                # return{"id":db_entry.id, "payload": db_entry.payload}
-
-            
-
+            results.append({
+                "filename": file.filename,
+                "status": "success",
+                "message": "Uploaded and extracted successfully"
+            })
 
         except Exception as e:
             results.append({
-                "filename": filename,
-                "status":"Error",
+                "filename": file.filename,
+                "status": "error",
                 "message": str(e)
             })
-            continue
-            # return JSONResponse(content={"res": data})
 
-        
-    return {"results": results}
+    return {
+        "request_id": request_id,
+        "results": results
+    }
+
+
+
+
+#----------- fetch the detail of table -------------
+
+@app.get("/requests/")
+def get_requests(db: Session = Depends(get_db)):
+    records = db.query(User).all()
+    return [
+        {
+            "request_id": record.request_id,
+            "uploaded_by": record.uploaded_by,
+            "uploaded_time": record.uploaded_time
+        }
+        for record in records
+    ]
+
+
+@app.get("/request-details/{request_id}")
+def get_request_details(request_id: str, db: Session = Depends(get_db)):
+    record = db.query(User).filter(User.request_id == request_id).first()
+    
+    if not record:
+        raise HTTPException(status_code=404, detail="Request ID not found")
+    
+    return {
+        "payload": record.payload,
+        "diff": record.diff
+    }
+
+
 
 #---------- DeepSeek API Connection -----------
 
@@ -269,29 +216,30 @@ def get_deepseekR1_res(message):
 
 
 
+
 def get_revision(filename: str, db:Session) -> list:
     latest_file = db.query(User).filter(User.filename == filename).order_by(User.revision.desc()).first()
 
     
 
-   #two API code -  
-    if latest_file:
-        new_revision = latest_file.revision + 1
+#    #two API code -  
+#     if latest_file:
+#         new_revision = latest_file.revision + 1
 
-        if new_revision == 1:
-            return [1, None]
-        else:
-            return [new_revision, latest_file.payload]
+#         if new_revision == 1:
+#             return [1, None]
+#         else:
+#             return [new_revision, latest_file.payload]
 
 
 
  # single API code - 
-    # if latest_file:
-    #     new_revision = latest_file.revision + 1
-    # else:
-    #     new_revision = 1
+    if latest_file:
+        new_revision = latest_file.revision + 1
+    else:
+        new_revision = 1
 
-    # return [new_revision, latest_file.payload if latest_file else None]
+    return [new_revision, latest_file.payload if latest_file else None]
 
 
 
